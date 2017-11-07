@@ -143,6 +143,7 @@ def main():
     print('#########################################################################')
     print('Start Adversarial Training...')
     log.write('adversarial training...\n')
+    saver = tf.train.Saver()
     for total_batch in range(TOTAL_BATCH):
         print(total_batch)
         # Train the generator for one step
@@ -179,6 +180,8 @@ def main():
                         discriminator.dropout_keep_prob: dis_dropout_keep_prob
                     }
                     _ = sess.run(discriminator.train_op, feed)
+        if total_batch % 5 == 0 or total_batch == TOTAL_BATCH - 1:
+            saver.save(sess, "model_%i.ckpt"%total_batch, global_step=total_batch)
 
     log.close()
 

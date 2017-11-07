@@ -1,0 +1,10 @@
+.python-version
+__pycache__
+*.pyc
+*.bak
+data/*.txt
+save/generator_sample*
+save/eval_file*
+save/real_data*
+data/*ckpt
+
