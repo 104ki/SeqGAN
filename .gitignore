@@ -7,4 +7,5 @@ save/generator_sample*
 save/eval_file*
 save/real_data*
 data/*ckpt
+save/model*
 

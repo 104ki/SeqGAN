@@ -10,8 +10,8 @@ class Generator(object):
         self.batch_size = batch_size
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
-        self.sequence_length = sequence_length
-        self.start_token = tf.constant([start_token] * self.batch_size, dtype=tf.int32)
+        self.sequence_length = sequence_length-1
+        self.start_token = tf.placeholder(dtype=tf.int32, shape=[self.batch_size])
         self.learning_rate = tf.Variable(float(learning_rate), trainable=False)
         self.reward_gamma = reward_gamma
         self.g_params = []
@@ -117,12 +117,13 @@ class Generator(object):
         self.g_grad, _ = tf.clip_by_global_norm(tf.gradients(self.g_loss, self.g_params), self.grad_clip)
         self.g_updates = g_opt.apply_gradients(list(zip(self.g_grad, self.g_params)))
 
-    def generate(self, sess):
-        outputs = sess.run(self.gen_x)
+    def generate(self, sess, start_token):
+        outputs = sess.run(self.gen_x, feed_dict={self.start_token: start_token})
         return outputs
 
-    def pretrain_step(self, sess, x):
-        outputs = sess.run([self.pretrain_updates, self.pretrain_loss], feed_dict={self.x: x})
+    def pretrain_step(self, sess, x, start_token):
+        outputs = sess.run([self.pretrain_updates, self.pretrain_loss], feed_dict={self.x: x,
+                                                                                   self.start_token: start_token})
         return outputs
 
     def init_matrix(self, shape):

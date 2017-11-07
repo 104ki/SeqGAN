@@ -17,7 +17,7 @@ SEQ_LENGTH = 17 # sequence length
 START_TOKEN = 0
 PRE_EPOCH_NUM = 120 # supervise (maximum likelihood estimation) epochs
 SEED = 88
-BATCH_SIZE = 64
+BATCH_SIZE = 512
 
 #########################################################################################
 #  Discriminator  Hyper-parameters
@@ -27,7 +27,7 @@ dis_filter_sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, SEQ_LENGTH]
 dis_num_filters = [100, 200, 200, 200, 200, 100, 100, 100, 100, 100, 160, 160]
 dis_dropout_keep_prob = 0.75
 dis_l2_reg_lambda = 0.2
-dis_batch_size = 64
+dis_batch_size = 512
 VOCAB_SIZE = 33448
 
 #########################################################################################
@@ -38,17 +38,18 @@ positive_file = 'data/train_data.txt'
 negative_file = 'save/generator_sample.txt'
 #eval_file = 'save/eval_file.txt'
 generated_num = 50000
+START_TOKEN_CANDIDATES_PATH = "./data/start_tokens.csv" #token_id, prob
 
 
-def generate_samples(sess, trainable_model, batch_size, generated_num, output_file):
+def generate_samples(sess, trainable_model, batch_size, generated_num, output_file, start_tokens):
     # Generate Samples
     generated_samples = []
-    for _ in range(int(generated_num / batch_size)):
-        generated_samples.extend(trainable_model.generate(sess))
+    for idx in range(int(generated_num / batch_size)):
+        generated_samples.extend(trainable_model.generate(sess, start_tokens[idx*batch_size:(idx+1)*batch_size]))
 
     with open(output_file, 'w') as fout:
-        for poem in generated_samples:
-            buffer = ' '.join([str(x) for x in poem]) + '\n'
+        for idx, poem in enumerate(generated_samples):
+            buffer = ' '.join([str(start_tokens[idx])]+[str(x) for x in poem]) + '\n'
             fout.write(buffer)
 
 
@@ -65,7 +66,6 @@ def target_loss(sess, target_lstm, data_loader):
 
     return np.mean(nll)
 
-
 def pre_train_epoch(sess, trainable_model, data_loader):
     # Pre-train the generator using MLE for one epoch
     supervised_g_losses = []
@@ -73,16 +73,29 @@ def pre_train_epoch(sess, trainable_model, data_loader):
 
     for it in range(data_loader.num_batch):
         batch = data_loader.next_batch()
-        _, g_loss = trainable_model.pretrain_step(sess, batch)
+        _, g_loss = trainable_model.pretrain_step(sess, batch[:, 1:], batch[:, 0])
         supervised_g_losses.append(g_loss)
 
     return np.mean(supervised_g_losses)
+
+def get_start_token(candidate_idx, output_size, p=None):
+    candidate_idx = np.random.choice(candidate_idx, size=output_size, replace=True, p=p)
+    return candidate_idx.reshape((-1,))
 
 
 def main():
     random.seed(SEED)
     np.random.seed(SEED)
     assert START_TOKEN == 0
+    start_candidates = []
+    p_start_candidates = []
+    with open(START_TOKEN_CANDIDATES_PATH) as fin:
+        for l in fin:
+            token = l.strip().split(",")
+            start_candidates.append(token[0])
+            p_start_candidates.append(float(token[1]))
+    start_candidates = np.array(start_candidates, dtype=np.int32)
+    p_start_candidates = np.array(p_start_candidates, dtype=np.float32)
 
     gen_data_loader = Gen_Data_loader(BATCH_SIZE, SEQ_LENGTH)
 #    likelihood_data_loader = Gen_Data_loader(BATCH_SIZE) # For testing
@@ -125,7 +138,9 @@ def main():
     print('Start pre-training discriminator...')
     # Train 3 epoch on the generated data and do this for 50 times
     for idx in range(50):
-        generate_samples(sess, generator, BATCH_SIZE, generated_num, negative_file+".pre%i"%idx)
+        print(idx)
+        start_tokens = get_start_token(start_candidates, generated_num, p=p_start_candidates)
+        generate_samples(sess, generator, BATCH_SIZE, generated_num, negative_file+".pre%i"%idx, start_tokens)
         dis_data_loader.load_train_data(positive_file, negative_file+".pre%i"%idx)
         for _ in range(3):
             dis_data_loader.reset_pointer()
@@ -148,9 +163,10 @@ def main():
         print(total_batch)
         # Train the generator for one step
         for it in range(1):
-            samples = generator.generate(sess)
-            rewards = rollout.get_reward(sess, samples, 16, discriminator)
-            feed = {generator.x: samples, generator.rewards: rewards}
+            start_token = get_start_token(start_candidates, BATCH_SIZE, p=p_start_candidates)
+            samples = generator.generate(sess, start_token)
+            rewards = rollout.get_reward(sess, samples, 16, discriminator, start_token)
+            feed = {generator.x: samples, generator.rewards: rewards, generator.start_token: start_token}
             _ = sess.run(generator.g_updates, feed_dict=feed)
 
         # Test
@@ -167,7 +183,8 @@ def main():
 
         # Train the discriminator
         for _ in range(5):
-            generate_samples(sess, generator, BATCH_SIZE, generated_num, negative_file+".gan%i"%total_batch)
+            start_tokens = get_start_token(start_candidates, generated_num, p=p_start_candidates)
+            generate_samples(sess, generator, BATCH_SIZE, generated_num, negative_file+".gan%i"%total_batch, start_tokens)
             dis_data_loader.load_train_data(positive_file, negative_file+".gan%i"%total_batch)
 
             for _ in range(3):
@@ -180,8 +197,8 @@ def main():
                         discriminator.dropout_keep_prob: dis_dropout_keep_prob
                     }
                     _ = sess.run(discriminator.train_op, feed)
-        if total_batch % 5 == 0 or total_batch == TOTAL_BATCH - 1:
-            saver.save(sess, "model_%i.ckpt"%total_batch, global_step=total_batch)
+        if total_batch % 20 == 0 or total_batch == TOTAL_BATCH - 1:
+            saver.save(sess, "save/*model_%i.ckpt"%total_batch, global_step=total_batch)
 
     log.close()
 
